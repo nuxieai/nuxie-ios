@@ -537,6 +537,241 @@ final class PresentedStackEdgeTests: XCTestCase {
         }
     }
 
+    // MARK: A router's pushed pages: the swipe back from the edge
+
+    /// Started, and Step pushed over Home: the stack's two entries, both
+    /// pushes. Home is the first page of the Experience, which takes no
+    /// swipe back; Step's swipe back closes it while its `back` is not
+    /// showing.
+    private func pushedStep(_ run: Stack) async throws -> (home: NuxieMachineShown, step: NuxieMachineShown) {
+        await run.edge.start(event: "onboarding_completed", now: run.now)
+        let home = try await run.top()
+        try await run.tap("Next", on: home)
+        let step = try await run.top()
+        let stack = await run.edge.stack
+        XCTAssertEqual(stack.map(\.route), ["home", "step"])
+        XCTAssertEqual(stack.map(\.presentation), [.push, .push])
+        XCTAssertNil(stack[0].swipeBack, "the first page has a swipe back")
+        return (home, step)
+    }
+
+    // Oracle for this section: `Fixtures/router-push`'s rows as written,
+    // read as the header says `nux_machine_swipe_would` answers them: a
+    // swipe back presses the control its row names when it shows and is
+    // enabled, stays when it shows and is disabled or the row says
+    // `swipe=none`, and otherwise closes the page; on the first page of the
+    // Experience, of a sheet or of a cover it stays.
+
+    /// Step's `back` showing and enabled: the swipe back presses it, which
+    /// goes back by the machine's own pop.
+    func testAnEdgeSwipeWithTheControlShowingAndEnabledPressesIt() async throws {
+        let run = try Stack(plan: Stack.routerPushPlan())
+        do {
+            let (home, step) = try await pushedStep(run)
+            try await run.tap("Allow", on: step)
+            let allowed = await run.edge.stack
+            XCTAssertEqual(allowed.last?.swipeBack, .presses, "its back shows and is enabled")
+            XCTAssertEqual(run.owner.shown.last, allowed, "the owner was not told the swipe changed")
+            let written = await run.edge.log.count
+            let did = await run.edge.swipe(.back, on: step, now: run.advance())
+            XCTAssertEqual(did, .delivered(.presses))
+            let after = await run.edge.stack
+            XCTAssertEqual(after.map(\.shown), [home])
+            let backs = try await run.edge.slot("backs")
+            XCTAssertEqual(backs, .number(1), "the swipe did not press `back`")
+            let since = await Array(run.edge.log.dropFirst(written))
+            XCTAssertEqual(since.first, .swipe(step, .back, did: .presses), "\(since)")
+            XCTAssertTrue(since.contains(.gone(step)), "\(since)")
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// Step's `back` showing and disabled: the swipe back stays, nothing
+    /// moves, and the owner is told nothing.
+    func testAnEdgeSwipeWithTheControlDisabledStays() async throws {
+        let run = try Stack(plan: Stack.routerPushPlan())
+        do {
+            let (_, step) = try await pushedStep(run)
+            try await run.tap("Allow", on: step)
+            try await run.tap("Lock", on: step)
+            let before = await run.edge.stack
+            XCTAssertEqual(before.last?.swipeBack, .stays, "its back shows and is disabled")
+            let reports = run.owner.reports.count
+            let did = await run.edge.swipe(.back, on: step, now: run.advance())
+            XCTAssertEqual(did, .delivered(.stays))
+            let after = await run.edge.stack
+            XCTAssertEqual(after, before, "a swipe that stays moved what is shown")
+            XCTAssertEqual(run.owner.reports.count, reports, "a swipe that stays told the owner something")
+            let backs = try await run.edge.slot("backs")
+            XCTAssertEqual(backs, .number(0))
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// Step's `back` not showing: the swipe back closes the page, and
+    /// `back` never runs.
+    func testAnEdgeSwipeWithTheControlNotShowingClosesThePage() async throws {
+        let run = try Stack(plan: Stack.routerPushPlan())
+        do {
+            let (home, step) = try await pushedStep(run)
+            let before = await run.edge.stack
+            XCTAssertEqual(before.last?.swipeBack, .closes, "its back is under an `if` not taken")
+            let written = await run.edge.log.count
+            let did = await run.edge.swipe(.back, on: step, now: run.advance())
+            XCTAssertEqual(did, .delivered(.closes))
+            let after = await run.edge.stack
+            XCTAssertEqual(after.map(\.shown), [home])
+            let backs = try await run.edge.slot("backs")
+            XCTAssertEqual(backs, .number(0), "a swipe that closes pressed `back`")
+            let since = await Array(run.edge.log.dropFirst(written))
+            XCTAssertEqual(since.first, .swipe(step, .back, did: .closes), "\(since)")
+            XCTAssertTrue(since.contains(.gone(step)), "\(since)")
+            let open = try await run.edge.recordOpen()
+            XCTAssertTrue(open, "closing a pushed page ended the Experience")
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// Stuck's row says `swipe=none`: its swipe back stays.
+    func testAnEdgeSwipeOnARowThatSaysSwipeNoneStays() async throws {
+        let run = try Stack(plan: Stack.routerPushPlan())
+        do {
+            let (_, step) = try await pushedStep(run)
+            try await run.tap("Deeper", on: step)
+            let stuck = try await run.top()
+            let before = await run.edge.stack
+            XCTAssertEqual(before.map(\.route), ["home", "step", "stuck"])
+            XCTAssertEqual(before.last?.swipeBack, .stays, "a row that says `swipe=none` closes")
+            let did = await run.edge.swipe(.back, on: stuck, now: run.advance())
+            XCTAssertEqual(did, .delivered(.stays))
+            let after = await run.edge.stack
+            XCTAssertEqual(after, before, "a swipe that stays moved what is shown")
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// Detail's row says no `swipe=`: its swipe back closes it, inside the
+    /// sheet, and the sheet stays.
+    func testAnEdgeSwipeOnARowWithNoSwipeClosesThePage() async throws {
+        let run = try Stack(plan: Stack.routerPushPlan())
+        do {
+            let (_, step) = try await pushedStep(run)
+            try await run.tap("Deeper", on: step)
+            try await run.tap("Offer", on: try await run.top())
+            let plans = try await run.top()
+            try await run.tap("Enter", on: plans)
+            let detail = try await run.top()
+            let before = await run.edge.stack
+            XCTAssertEqual(before.map(\.route), ["home", "step", "stuck", "plans", "detail"])
+            XCTAssertEqual(before.map(\.presentation), [.push, .push, .push, .sheet, .push])
+            XCTAssertEqual(before.last?.swipeBack, .closes, "a row with no `swipe=` does not close")
+            XCTAssertNil(before[3].swipeBack, "a sheet has a swipe back")
+            let did = await run.edge.swipe(.back, on: detail, now: run.advance())
+            XCTAssertEqual(did, .delivered(.closes))
+            let after = await run.edge.stack
+            XCTAssertEqual(after.map(\.route), ["home", "step", "stuck", "plans"])
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// The first page of the Experience and the first page of a sheet take
+    /// no swipe back: each stays, and nothing moves.
+    func testAnEdgeSwipeOnTheFirstPageOfASegmentStays() async throws {
+        let run = try Stack(plan: Stack.routerPushPlan())
+        do {
+            await run.edge.start(event: "onboarding_completed", now: run.now)
+            let home = try await run.top()
+            let alone = await run.edge.stack
+            let first = await run.edge.swipe(.back, on: home, now: run.advance())
+            XCTAssertEqual(first, .delivered(.stays), "the Experience's first page took a swipe back")
+            let still = await run.edge.stack
+            XCTAssertEqual(still, alone)
+
+            try await run.tap("Next", on: home)
+            try await run.tap("Deeper", on: try await run.top())
+            try await run.tap("Offer", on: try await run.top())
+            let plans = try await run.top()
+            let before = await run.edge.stack
+            let sheet = await run.edge.swipe(.back, on: plans, now: run.advance())
+            XCTAssertEqual(sheet, .delivered(.stays), "a sheet's first page took a swipe back")
+            let after = await run.edge.stack
+            XCTAssertEqual(after, before)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
+    /// A swipe down on a sheet reads the page on top of it: with Plans on
+    /// top, its `close` shows and is enabled, so the swipe presses it; with
+    /// Detail pushed inside the sheet, Detail shows no `close`, so the swipe
+    /// closes the sheet, with Detail in it, and `close` never runs.
+    func testASwipeDownOnASheetOverPagesReadsThePageOnTop() async throws {
+        for inside in [false, true] {
+            let run = try Stack(plan: Stack.routerPushPlan())
+            do {
+                let (_, step) = try await pushedStep(run)
+                try await run.tap("Deeper", on: step)
+                let stuck = try await run.top()
+                try await run.tap("Offer", on: stuck)
+                let plans = try await run.top()
+                if inside { try await run.tap("Enter", on: plans) }
+                let before = await run.edge.stack
+                XCTAssertEqual(before[3].swipeDown, inside ? .closes : .presses, "inside: \(inside)")
+                let did = await run.edge.swipe(.down, on: plans, now: run.advance())
+                XCTAssertEqual(did, .delivered(inside ? .closes : .presses), "inside: \(inside)")
+                let after = await run.edge.stack
+                XCTAssertEqual(after.map(\.route), ["home", "step", "stuck"], "inside: \(inside)")
+                let closes = try await run.edge.slot("closes")
+                XCTAssertEqual(closes, .number(inside ? 0 : 1), "inside: \(inside)")
+                try await run.close()
+            } catch {
+                try? await run.close()
+                throw error
+            }
+        }
+    }
+
+    /// A swipe back that presses a `back` which clears the stack ends the
+    /// Experience in the same delivery: nothing is shown and the record is
+    /// over.
+    func testAnEdgeSwipeThatEmptiesTheStackEndsTheExperience() async throws {
+        let run = try Stack(plan: Stack.routerPushPlan())
+        do {
+            let (_, step) = try await pushedStep(run)
+            try await run.tap("Allow", on: step)
+            try await run.tap("Leave", on: step)
+            let did = await run.edge.swipe(.back, on: step, now: run.advance())
+            XCTAssertEqual(did, .delivered(.presses))
+            let after = await run.edge.stack
+            XCTAssertEqual(after, [])
+            let open = try await run.edge.recordOpen()
+            XCTAssertFalse(open, "the swipe that emptied the stack did not end the Experience")
+            let fault = await run.edge.fault
+            XCTAssertNil(fault)
+            try await run.close()
+        } catch {
+            try? await run.close()
+            throw error
+        }
+    }
+
     /// The line of `frame` that shows the count of taps.
     private static func taps(_ frame: DrawnFrame) throws -> String {
         try XCTUnwrap(frame.lines.first { $0.text.hasPrefix("Taps") }?.text, "no count among \(frame.lines.map(\.text))")
@@ -662,6 +897,21 @@ private final class Stack {
             files: [NuxieMachineSourceFile(path: "main.nux", text: try text("main")),
                     NuxieMachineSourceFile(path: "sheets.nux", text: try text("sheets"))],
             assets: [], root: "main", app: "app", experience: "router-sheet", version: 1)
+    }
+
+    /// The router-push fixture's two program files, as the test bundle
+    /// carries them; the folder's `main.test.nux` is not one of them.
+    static func routerPushPlan() throws -> NuxieMachinePlanSource {
+        func text(_ name: String) throws -> String {
+            let url = try XCTUnwrap(Bundle(for: Stack.self).url(
+                forResource: name, withExtension: "nux", subdirectory: "router-push"),
+                "the test bundle carries router-push/\(name).nux")
+            return try String(contentsOf: url, encoding: .utf8)
+        }
+        return NuxieMachinePlanSource(
+            files: [NuxieMachineSourceFile(path: "main.nux", text: try text("main")),
+                    NuxieMachineSourceFile(path: "pages.nux", text: try text("pages"))],
+            assets: [], root: "main", app: "app", experience: "router-push", version: 1)
     }
 }
 

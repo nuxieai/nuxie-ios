@@ -1,0 +1,24 @@
+{
+  "note": "A router for the Nux machine suite's push checks: home, the first page, a push that arrives as a cover; step, a push whose row says swipe=\"back\", with that control under an `if` (shown by allow, disabled by lock; with leave run it clears the stack and ends the Experience); stuck, a push whose row says swipe=none; plans, a sheet whose swipe presses its close; and detail, a push inside the sheet whose row says no swipe=. The event onboarding_completed opens home. Written for this suite against nuxieDevCommit; check it with nux check there before an SDK run. The plan is the two program files; main.test.nux holds the folder's tests and is copied for provenance only, never handed to the session or compiled on the device.",
+  "plan": {
+    "root": "main",
+    "app": "app",
+    "experience": "router-push",
+    "version": 1
+  },
+  "nuxieDevCommit": "f0019c97289",
+  "files": {
+    "main.nux": {
+      "sha256": "1f41fd18e91edfc11e9171af248356ea3276523524caf878ebae3976c31851bc",
+      "sizeBytes": 1406
+    },
+    "main.test.nux": {
+      "sha256": "c8d146e7f9854b5fe3ad3d9d70261f98266d6910f1bdff92428a8b247c84548e",
+      "sizeBytes": 1795
+    },
+    "pages.nux": {
+      "sha256": "3b5411f2c20a6cff43fe4fbb4b76f61529371819a3df51d6533ce1bea1209450",
+      "sizeBytes": 2313
+    }
+  }
+}

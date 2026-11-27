@@ -1,0 +1,74 @@
+use Home, Step, Stuck, Plans, Detail from "pages"
+
+routes nav
+  home "/home"
+  step "/step"
+  stuck "/stuck"
+  plans "/plans"
+  detail "/detail"
+
+component Pushes
+  platforms ios android
+
+  state showing = false
+  state locked = false
+  state leaving = false
+  state backs = 0
+  state closes = 0
+
+  entry opened
+    on event "onboarding_completed"
+    do open
+
+  action open
+    nav = push(nav, path("home"))
+
+  action forward
+    nav = push(nav, path("step"))
+
+  action deeper
+    nav = push(nav, path("stuck"))
+
+  action offer
+    nav = push(nav, path("plans"))
+
+  action enter
+    nav = push(nav, path("detail"))
+
+  action allow
+    showing = true
+
+  action lock
+    locked = true
+
+  action leave
+    leaving = true
+
+  action retreat
+    backs = backs + 1
+    if leaving
+      nav = clear(nav)
+      exit
+    else
+      nav = back(nav)
+
+  action close
+    closes = closes + 1
+    nav = back(nav)
+
+  action done
+    nav = back(nav)
+
+  view
+    for e in stack(nav) key=e.id
+      match e.name
+        case home
+          Home(forward=forward)
+        case step
+          Step(showing=showing, locked=locked, allow=allow, lock=lock, leave=leave, deeper=deeper, retreat=retreat)  swipe="back"
+        case stuck
+          Stuck(offer=offer, done=done)  swipe=none
+        case plans
+          Plans(enter=enter, close=close)  presentation=sheet swipe="close"
+        case detail
+          Detail(done=done)

@@ -1,0 +1,70 @@
+component Home
+  props
+    forward: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text "Home" color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=forward id="next"
+        text "Next" color=#eef3f1 font-size=16
+
+component Step
+  props
+    showing: boolean
+    locked: boolean
+    allow: action
+    lock: action
+    leave: action
+    deeper: action
+    retreat: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text "Step" color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=allow id="allow"
+        text "Allow" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=lock id="lock"
+        text "Lock" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=leave id="leave"
+        text "Leave" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=deeper id="deeper"
+        text "Deeper" color=#eef3f1 font-size=16
+      if showing
+        button padding=12 background-color=#232c30 press=retreat disabled=locked id="back"
+          text "Back" color=#eef3f1 font-size=16
+
+component Stuck
+  props
+    offer: action
+    done: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text "Stuck" color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=offer id="offer"
+        text "Offer" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=done id="return"
+        text "Return" color=#eef3f1 font-size=16
+
+component Plans
+  props
+    enter: action
+    close: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text "Plans" color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=enter id="enter"
+        text "Enter" color=#eef3f1 font-size=16
+      button padding=12 background-color=#232c30 press=close id="close"
+        text "Close" color=#eef3f1 font-size=16
+
+component Detail
+  props
+    done: action
+
+  view
+    column padding=24 gap=12 background-color=#0d1214
+      text "Detail" color=#eef3f1 font-size=24 id="title"
+      button padding=12 background-color=#232c30 press=done id="done"
+        text "Done" color=#eef3f1 font-size=16
