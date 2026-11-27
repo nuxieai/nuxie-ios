@@ -562,17 +562,19 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         }
     }
 
-    /// A pushed page fills its segment as its first page does, and is told
-    /// the segment's place, with no bar's height in it: in a cover, the
-    /// window's safe area with the cover's own added, the same place a
-    /// cover's only page is told; in a sheet, the sheet's own.
+    /// A pushed page fills its cover as its first page does, and is told
+    /// the cover's place, with no bar's height in it: the window's safe
+    /// area with the cover's own added, the same place a cover's only page
+    /// is told. A page pushed inside a sheet is measured in the host app by
+    /// `PushStackUITests`, since this runner never finishes presenting a
+    /// sheet.
     ///
     /// The window's safe area is the simulator's, which this runner does
     /// not choose (a window 390 by 844 on a phone 402 by 874 has 62 at the
     /// top and 4 at the bottom), so the place is checked against it, not
     /// against fixed numbers.
     @MainActor
-    func testAPushedPageIsPlacedAsItsSegment() async throws {
+    func testAPushedPageIsPlacedAsItsCover() throws {
         let loop = try Self.loop()
         let added = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
         let (cover, window) = Self.segment([Self.page(1, .cover), Self.page(2, .push)], loop: loop)
@@ -592,27 +594,7 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(alone.pages.first).place, pushed.place,
                        "a pushed page is placed apart from a cover's only page")
 
-        let host = UIViewController()
-        let sheetWindow = Self.window(host)
-        let sheet = NuxieMachineSegmentController(pages: [Self.page(4, .sheet), Self.page(5, .push)].map {
-            NuxieMachineScreenViewController(presenting: $0, loop: loop)
-        })
-        var presented = false
-        host.present(sheet, animated: false) { presented = true }
-        try await waitUntil("the sheet is presented", seconds: 5) { presented }
-        sheetWindow.layoutIfNeeded()
-        let inSheet = try XCTUnwrap(sheet.pages.last)
-        try await waitUntil("the pushed page in the sheet has a place", seconds: 5) {
-            sheetWindow.layoutIfNeeded()
-            return inSheet.place != nil
-        }
-        let place = try XCTUnwrap(inSheet.place, "a pushed page in a sheet has no place")
-        let view = try XCTUnwrap(sheet.view)
-        XCTAssertEqual(place.width, Double(view.bounds.width))
-        XCTAssertEqual(place.height, Double(view.bounds.height), "a pushed page does not fill its sheet")
-        XCTAssertEqual(place.top, Double(view.safeAreaInsets.top), "a pushed page is not told its sheet's insets")
-        XCTAssertEqual(place.bottom, Double(view.safeAreaInsets.bottom), "a pushed page is not told its sheet's insets")
-        withExtendedLifetime((window, aloneWindow, sheetWindow)) {}
+        withExtendedLifetime((window, aloneWindow)) {}
     }
 
     // MARK: What a swipe down on a sheet does

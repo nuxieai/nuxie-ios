@@ -604,8 +604,12 @@ enum NuxieMachineScrollSheetFixture {
 /// order, from the edge's log (`edge`): `T R B L W H` each, `; ` between, or
 /// `none`. `nuxie-machine-environments` is labeled the same way with every
 /// environment the session took, `light 17.0` or `dark 23.0` each, and
-/// `nuxie-machine-presences` with every presence, `here` or `away`. All are
-/// read four times a second, so a UI test can tell a frame the app drew
+/// `nuxie-machine-presences` with every presence, `here` or `away`.
+/// `nuxie-machine-segment` is labeled with the top segment, the native
+/// presentation on top: `segment X Y W H` (its view's frame in its window),
+/// `insets T R B L` (the safe-area insets UIKit gives its view), `pages N`,
+/// then `place T R B L W H` once its page on top has a place; or `none`.
+/// All are read four times a second, so a UI test can tell a frame the app drew
 /// wrong from a screenshot taken wrong, and see each place and environment
 /// told.
 @MainActor
@@ -636,6 +640,7 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
         private let placesLabel = UILabel()
         private let environmentsLabel = UILabel()
         private let presencesLabel = UILabel()
+        private let segmentLabel = UILabel()
         private let edge: @MainActor () -> NuxieMachineEdge?
         /// Kept for the app's run, as the window is; it holds this weakly.
         private var timer: Timer?
@@ -687,6 +692,13 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             presencesLabel.accessibilityIdentifier = "nuxie-machine-presences"
             presencesLabel.accessibilityLabel = "none"
             view.addSubview(presencesLabel)
+            segmentLabel.textColor = .clear
+            segmentLabel.font = .systemFont(ofSize: 1)
+            segmentLabel.frame = CGRect(x: 5, y: 0, width: 1, height: 1)
+            segmentLabel.isAccessibilityElement = true
+            segmentLabel.accessibilityIdentifier = "nuxie-machine-segment"
+            segmentLabel.accessibilityLabel = "none"
+            view.addSubview(segmentLabel)
             self.view = view
         }
 
@@ -695,6 +707,7 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.readSurface()
+                    self?.readSegment()
                     self?.readPlaces()
                 }
             }
@@ -722,6 +735,35 @@ final class NuxieMachineSafeAreaWindow: UIWindow {
             } ?? ""
             surfaceLabel.accessibilityLabel = "bounds \(numbers[0]) \(numbers[1]) drawable \(numbers[2]) \(numbers[3]) "
                 + "scale \(numbers[4]) drawn \(numbers[5]) \(numbers[6])" + viewInsets + place
+        }
+
+        /// The top segment: the last native presentation in any of the
+        /// scene's other windows, its frame and insets as UIKit gives them,
+        /// and the place its page on top is told.
+        private func readSegment() {
+            var top: NuxieMachineSegmentController?
+            for window in view.window?.windowScene?.windows ?? [] where !(window is NuxieMachineSafeAreaWindow) {
+                var controller = window.rootViewController
+                while let next = controller?.presentedViewController {
+                    if let segment = next as? NuxieMachineSegmentController { top = segment }
+                    controller = next
+                }
+            }
+            guard let segment = top, let shown = segment.viewIfLoaded else {
+                segmentLabel.accessibilityLabel = "none"
+                return
+            }
+            func words(_ numbers: [CGFloat]) -> String { numbers.map { "\(Double($0))" }.joined(separator: " ") }
+            let frame = shown.convert(shown.bounds, to: nil)
+            let insets = shown.safeAreaInsets
+            var text = "segment " + words([frame.minX, frame.minY, frame.width, frame.height])
+                + " insets " + words([insets.top, insets.right, insets.bottom, insets.left])
+                + " pages \(segment.pages.count)"
+            if let page = segment.pages.last, page === segment.topViewController, let place = page.place {
+                text += " place " + [place.top, place.right, place.bottom, place.left, place.width, place.height]
+                    .map { "\($0)" }.joined(separator: " ")
+            }
+            segmentLabel.accessibilityLabel = text
         }
 
         /// Every place, environment and presence the session took, from
