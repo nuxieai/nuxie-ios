@@ -490,6 +490,130 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
         }
     }
 
+    // MARK: What a swipe down on a sheet does
+
+    /// Whether UIKit lets the person swipe a sheet away is the machine's
+    /// answer: a swipe that closes runs natively; one that presses a control
+    /// or does nothing is held. The answer each report brings is taken at
+    /// once. A cover has no swipe, whatever is said.
+    @MainActor
+    func testIsModalInPresentationFollowsWhatTheSwipeDoesAfterEachReport() throws {
+        let loop = try Self.loop()
+        let shown = NuxieMachineShown(journey: 1, instance: 1)
+        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: .closes)
+        XCTAssertFalse(controller.isModalInPresentation, "a swipe that closes is held")
+        for (answer, held) in [(NuxieMachineSwipeWould.presses, true), (.stays, true), (.closes, false)] {
+            controller.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
+                                                    swipeDown: answer))
+            XCTAssertEqual(controller.swipeDown, answer)
+            XCTAssertEqual(controller.isModalInPresentation, held, "\(answer)")
+            XCTAssertEqual(controller.modalReasons, held ? [.swipeRefused] : [], "\(answer)")
+        }
+        // A report for another presentation changes nothing here.
+        controller.follow(NuxieMachinePresented(shown: NuxieMachineShown(journey: 1, instance: 2), route: "other",
+                                                presentation: .sheet, swipeDown: .stays))
+        XCTAssertFalse(controller.isModalInPresentation)
+        let (cover, coverWindow) = Self.screen(presenting: .cover, loop: loop)
+        XCTAssertEqual(cover.modalReasons, [.swipeRefused])
+        XCTAssertTrue(cover.isModalInPresentation)
+        withExtendedLifetime((window, coverWindow)) {}
+    }
+
+    /// The reasons combine: while the Screen is loading, a sheet whose swipe
+    /// closes still cannot be swiped away, and a sheet whose swipe is
+    /// refused stays held once loading is over.
+    @MainActor
+    func testTheReasonsASheetIsHeldCombine() throws {
+        let loop = try Self.loop()
+        let shown = NuxieMachineShown(journey: 1, instance: 1)
+        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: .closes)
+        controller.modalReasons.insert(.loading)
+        XCTAssertTrue(controller.isModalInPresentation, "a loading sheet whose swipe closes can be swiped away")
+        controller.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
+                                                swipeDown: .stays))
+        XCTAssertEqual(controller.modalReasons, [.loading, .swipeRefused])
+        controller.modalReasons.remove(.loading)
+        XCTAssertTrue(controller.isModalInPresentation, "the refused swipe went with the loading")
+        controller.follow(NuxieMachinePresented(shown: shown, route: "screen", presentation: .sheet,
+                                                swipeDown: .closes))
+        XCTAssertFalse(controller.isModalInPresentation)
+        withExtendedLifetime(window) {}
+    }
+
+    /// The screen reader's escape is a swipe down, read from the same
+    /// answer: where the swipe does nothing it is passed on and nothing is
+    /// delivered; where it presses or closes, it is delivered once and the
+    /// escape is taken. A cover passes it on.
+    @MainActor
+    func testTheScreenReadersEscapeIsASwipeDownForEachAnswer() throws {
+        let loop = try Self.loop()
+        for (answer, taken) in [(NuxieMachineSwipeWould.stays, false), (.presses, true), (.closes, true)] {
+            let (controller, window) = Self.screen(presenting: .sheet, loop: loop, swipeDown: answer)
+            var delivered = 0
+            controller.onEscape = { delivered += 1 }
+            XCTAssertEqual(controller.accessibilityPerformEscape(), taken, "\(answer)")
+            XCTAssertEqual(delivered, taken ? 1 : 0, "\(answer)")
+            withExtendedLifetime(window) {}
+        }
+        let (cover, window) = Self.screen(presenting: .cover, loop: loop)
+        var delivered = 0
+        cover.onEscape = { delivered += 1 }
+        XCTAssertFalse(cover.accessibilityPerformEscape())
+        XCTAssertEqual(delivered, 0)
+        withExtendedLifetime(window) {}
+    }
+
+    /// A sheet rests at the heights its row writes, in its order: medium
+    /// and large are the system's, a height in points and a percent are
+    /// detents of this module's, named by their kind and number. A row that
+    /// writes none rests at large.
+    @MainActor
+    func testASheetRestsAtTheDetentsItsRowWrites() throws {
+        guard #available(iOS 16.0, *) else { throw XCTSkip("custom detents need iOS 16") }
+        let loop = try Self.loop()
+        let (controller, window) = Self.screen(presenting: .sheet, loop: loop,
+                                               detents: [.medium, .percent(40), .points(320), .fitContent])
+        let sheet = try XCTUnwrap(controller.sheetPresentationController)
+        XCTAssertEqual(sheet.detents.map(\.identifier),
+                       [.medium, .init(rawValue: "nuxie.percent.40.0"), .init(rawValue: "nuxie.points.320.0"),
+                        .init(rawValue: "nuxie.fit-content")])
+        let (plain, plainWindow) = Self.screen(presenting: .sheet, loop: loop)
+        XCTAssertEqual(try XCTUnwrap(plain.sheetPresentationController).detents.map(\.identifier), [.large])
+        withExtendedLifetime((window, plainWindow)) {}
+    }
+
+    /// The height each of this module's detents rests at, for a sheet that
+    /// can be at most 800 points: points and a percent as written, never
+    /// more than the most; the content's height as measured, never more
+    /// than the most, and the most until it is measured.
+    func testEachDetentsHeightAndFitContentFromAMeasuredHeight() {
+        let height = NuxieMachineScreenViewController.height(of:maximum:contentHeight:)
+        XCTAssertEqual(height(.points(320), 800, nil), 320)
+        XCTAssertEqual(height(.points(1200), 800, nil), 800)
+        XCTAssertEqual(height(.percent(40), 800, nil), 320)
+        XCTAssertEqual(height(.fitContent, 800, 412), 412)
+        XCTAssertEqual(height(.fitContent, 800, 1200), 800)
+        XCTAssertEqual(height(.fitContent, 800, nil), 800)
+        XCTAssertEqual(height(.fitContent, 800, 0), 800)
+        XCTAssertNil(height(.medium, 800, nil))
+        XCTAssertNil(height(.large, 800, nil))
+    }
+
+    /// A fit-content sheet takes the content's height as the engine
+    /// measures it after a frame; a height the engine cannot give leaves it.
+    @MainActor
+    func testAFitContentSheetTakesTheMeasuredHeight() throws {
+        let loop = try Self.loop()
+        let (controller, window) = Self.screen(presenting: .sheet, loop: loop, detents: [.fitContent])
+        XCTAssertNil(controller.contentHeight)
+        controller.measured(contentHeight: 412)
+        XCTAssertEqual(controller.contentHeight, 412)
+        controller.measured(contentHeight: nil)
+        controller.measured(contentHeight: .nan)
+        XCTAssertEqual(controller.contentHeight, 412)
+        withExtendedLifetime(window) {}
+    }
+
     /// A loop over an edge whose session presents nothing.
     @MainActor
     private static func loop(
@@ -508,9 +632,11 @@ final class NuxieMachineSheetPresenterTests: XCTestCase {
     @MainActor
     private static func screen(
         presenting presentation: NuxieMachinePresentation, loop: NuxieMachineScreenLoop,
-        shown: NuxieMachineShown = NuxieMachineShown(journey: 1, instance: 1), route: String = "screen"
+        shown: NuxieMachineShown = NuxieMachineShown(journey: 1, instance: 1), route: String = "screen",
+        detents: [NuxieMachineDetent] = [], swipeDown: NuxieMachineSwipeWould? = nil
     ) -> (NuxieMachineScreenViewController, UIWindow) {
-        let presented = NuxieMachinePresented(shown: shown, route: route, presentation: presentation)
+        let presented = NuxieMachinePresented(shown: shown, route: route, presentation: presentation,
+                                              detents: detents, swipeDown: swipeDown)
         let controller = NuxieMachineScreenViewController(presenting: presented, loop: loop)
         controller.additionalSafeAreaInsets = UIEdgeInsets(top: 59, left: 0, bottom: 34, right: 0)
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))

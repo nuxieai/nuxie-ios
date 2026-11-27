@@ -1,0 +1,24 @@
+{
+  "note": "A router for the Nux machine suite's sheet checks: a cover, home; a sheet, plans, that rests at medium, 40% and 320 points and whose swipe presses its close, which shows once allow has run and is disabled once lock has; and a sheet, frozen, whose row says swipe=none. The event onboarding_completed opens home; offered opens plans alone. Written for this suite and checked with nux check at nuxieDevCommit, where the program compiled and its five tests passed. The plan is the two program files; main.test.nux holds the folder's tests and is copied for provenance only, never handed to the session or compiled on the device.",
+  "plan": {
+    "root": "main",
+    "app": "app",
+    "experience": "router-sheet",
+    "version": 1
+  },
+  "nuxieDevCommit": "96911b5bc09",
+  "files": {
+    "main.nux": {
+      "sha256": "869c0797cf70d3471850d853fda69cd929cb5a3c06c9874cc0fc075740f73980",
+      "sizeBytes": 1091
+    },
+    "main.test.nux": {
+      "sha256": "16735ce45d2f918ed45c8f1f8911079d1694aa9825071718d8240befe4f8d62d",
+      "sizeBytes": 881
+    },
+    "sheets.nux": {
+      "sha256": "925d371c595de26f0ce35dbc1747ed0491e3355b742afe4f666bc05ee3706052",
+      "sizeBytes": 1337
+    }
+  }
+}

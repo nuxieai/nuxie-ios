@@ -1,0 +1,41 @@
+test "a swipe closes the sheet while its close is not showing"
+  event "onboarding_completed"
+  expect route home
+  tap "offer"
+  expect route plans
+  swipe
+  expect route home
+  expect state closes == 0
+
+test "a swipe presses the close once it shows"
+  event "onboarding_completed"
+  tap "offer"
+  tap "allow"
+  expect has "close"
+  swipe
+  expect route home
+  expect state closes == 1
+
+test "the close shows, then is disabled"
+  event "onboarding_completed"
+  tap "offer"
+  expect missing "close"
+  tap "allow"
+  expect has "close"
+  tap "lock"
+  expect route plans
+  expect state locked == true
+
+test "the frozen sheet opens over home"
+  event "onboarding_completed"
+  tap "freeze"
+  expect route frozen
+  tap "done"
+  expect route home
+
+test "a swipe that empties the stack ends the Experience"
+  event "offered"
+  expect route plans
+  swipe
+  expect route none
+  expect ended
